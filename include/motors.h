@@ -21,6 +21,12 @@
 #define PWM_CHANNEL7 14
 #define PWM_CHANNEL8 15
 
+#define SERVO_1_CHANNEL 2
+#define SERVO_2_CHANNEL 3
+#define SERVO_FORWARD_PULSE 410  // ~2000μs → quay xuôi
+#define SERVO_BACKWARD_PULSE 205 // ~1000μs → quay ngược
+#define SERVO_STOP_PULSE 300     // ~1500μs → dừng
+
 Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
 
 void setDirectionMotors(int c1, int c2, int c3, int c4)
@@ -84,4 +90,38 @@ void setServoAngle(uint8_t channel, float angle)
 void setServoRotate(uint8_t channel, uint16_t pulse)
 {
     pwm.setPWM(channel, 0, pulse);
+}
+
+void setServo(uint8_t channel, uint16_t pulse)
+{
+    pwm.setPWM(channel, 0, pulse);
+}
+
+// Hàm tiến
+void servoForward()
+{
+    Serial.println("→ Tiến");
+    setServo(SERVO_1_CHANNEL, SERVO_FORWARD_PULSE);
+}
+
+// Hàm lùi
+void servoBackward()
+{
+    Serial.println("← Lùi");
+    setServo(SERVO_1_CHANNEL, SERVO_BACKWARD_PULSE);
+}
+
+// Hàm dừng
+void servoStop()
+{
+    Serial.println("■ Dừng");
+    setServo(SERVO_1_CHANNEL, SERVO_STOP_PULSE);
+}
+
+void setServoAngle(int angle)
+{
+    angle = constrain(angle, 0, 180);
+    int microsec = map(angle, 0, 180, 500, 2500);
+    int pulse = microsec / 4.88;
+    setServo(SERVO_2_CHANNEL, pulse);
 }

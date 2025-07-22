@@ -13,9 +13,9 @@ void loop()
 {
   ps2x.read_gamepad(0, 0);
   MovementControl();
-  LiftControl();
-  BasketControl();
-  // ballControll();
-  // ballOut();
+  nang_ha_tay_nang();
+  nang_ha_ro_bong();
+  tang_giam_chieu_dai_ro_dung_bong();
+  mo_cang_chan();
   delay(50);
 }

@@ -1,30 +1,32 @@
 #include <PS2X_lib.h>
+PS2X ps2x;
 
-PS2X ps2x; // create PS2 Controller Class object
-// #define BEBUG_CTRL
-
-// calibration for different kinds of PS2 controller, this value only suitable for the PS2 controller comes with VRC2023 K12 Maker kit
+// Calibration
 #define X_JOY_CALIB 127
 #define Y_JOY_CALIB 128
 
-#define PS2_DAT 12 // MOSI  19
-#define PS2_CMD 13 // MISO  23
-#define PS2_SEL 15 // SS     5
-#define PS2_CLK 14 // SLK   18
+// PS2 pins
+#define PS2_DAT 12
+#define PS2_CMD 13
+#define PS2_SEL 15
+#define PS2_CLK 14
 
+// Speed settings
 #define TOP_SPEED 4095
 #define NORM_SPEED 2048
-#define TURNING_FACTOR 1
 
-#define SERVO_CHANNEL_2 2 // Only use servo on channel 2
-#define SERVO_CHANNEL_3 3 // Only use servo on channel 3
+int current_speed = 0;
+const int ACCEL_INCREMENT = 100;
+const int ACCEL_INTERVAL = 50;
+unsigned long lastAccelTime = 0;
 
-#define SERVO_STOP 300    // Neutral pulse (stop)
-#define SERVO_FORWARD 420 // Forward speed
+int smoothed_c1 = 0, smoothed_c2 = 0, smoothed_c3 = 0, smoothed_c4 = 0;
 
-#define SINGLE_HAND_DRIVING 0
-#define TWO_HAND_DRIVING 1
-bool driving_mode = SINGLE_HAND_DRIVING;
+const int SMOOTH_STEP_UP = 80;
+const int SMOOTH_STEP_DOWN = 300;
+
+int smoothApproach(int current, int target);
+
 void setupMovementController()
 {
     int err = -1;
@@ -33,158 +35,178 @@ void setupMovementController()
         err = ps2x.config_gamepad(PS2_CLK, PS2_CMD, PS2_SEL, PS2_DAT, true, true);
     }
 }
+
 bool MovementControl()
 {
-    int speed = NORM_SPEED;
-    // if (ps2x.Button(PSAB_PAD_UP))
-    //     speed = TOP_SPEED;
-    if (ps2x.ButtonPressed(PSB_SELECT))
-        driving_mode = !driving_mode;
+    int target_speed = TOP_SPEED;
 
-    int nJoyX = (ps2x.Analog(PSS_RY) - X_JOY_CALIB); // forward/backward
-    int nJoyY = (ps2x.Analog(PSS_RX) - Y_JOY_CALIB); // turning
+    int nJoyX = ps2x.Analog(PSS_RY) - X_JOY_CALIB;
+    int nJoyY = ps2x.Analog(PSS_RX) - Y_JOY_CALIB;
 
-    int nMotMixL; // Motor (left) mixed output
-    int nMotMixR; // Motor (right) mixed output
+    int nMotMixL = 0, nMotMixR = 0;
 
-    if (nJoyX == -1 && nJoyY == 0) // in case of lost connection with the wireless controller, only used in VRC2023 PS2 wireless controller
+    if (nJoyX == -1 && nJoyY == 0)
     {
         setDirectionMotors(0, 0, 0, 0);
         return 0;
     }
 
-    bool temp = (nJoyY * nJoyX > 0);
-    if (nJoyX) // Turning
+    bool turningRight = (nJoyY * nJoyX > 0);
+    if (nJoyX)
     {
-        nMotMixL = -nJoyX + (nJoyY * temp);
-        nMotMixR = nJoyX + (nJoyY * !temp);
+        nMotMixL = -nJoyX + (nJoyY * turningRight);
+        nMotMixR = nJoyX + (nJoyY * !turningRight);
     }
-    else // Forward or Reverse
+    else
     {
         nMotMixL = nJoyY;
         nMotMixR = nJoyY;
     }
-#ifdef BEBUG_CTRL
-    Serial.print(F("Calculated value from joystick: "));
-    Serial.print(nJoyY);
-    Serial.print("\t");
-    Serial.println(nJoyX);
-#endif
-    int c1 = 0, c2 = 0, c3 = 0, c4 = 0;
+
+    unsigned long now = millis();
+    if (now - lastAccelTime >= ACCEL_INTERVAL)
+    {
+        if (current_speed < target_speed)
+        {
+            current_speed += ACCEL_INCREMENT;
+            if (current_speed > target_speed)
+                current_speed = target_speed;
+        }
+        else if (current_speed > target_speed)
+        {
+            current_speed -= ACCEL_INCREMENT;
+            if (current_speed < target_speed)
+                current_speed = target_speed;
+        }
+        lastAccelTime = now;
+    }
+
+    int target_c1 = 0, target_c2 = 0, target_c3 = 0, target_c4 = 0;
 
     if (nMotMixR > 0)
     {
-        c3 = nMotMixR;
-        c3 = map(c3, 0, 128, 0, speed);
+        target_c3 = map(nMotMixR, 0, 128, 0, current_speed);
     }
-
     else if (nMotMixR < 0)
     {
-        c4 = abs(nMotMixR) + 1;
-        c4 = map(c4, 0, 128, 0, speed);
+        target_c4 = map(abs(nMotMixR), 0, 128, 0, current_speed);
     }
 
     if (nMotMixL > 0)
     {
-        c1 = nMotMixL;
-        c1 = map(c1, 0, 128, 0, speed);
+        target_c1 = map(nMotMixL, 0, 128, 0, current_speed);
     }
     else if (nMotMixL < 0)
     {
-        c2 = abs(nMotMixL);
-        c2 = map(c2, 0, 128, 0, speed);
+        target_c2 = map(abs(nMotMixL), 0, 128, 0, current_speed);
     }
-    setDirectionMotors(c1, c2, c3, c4);
+
+    smoothed_c1 = smoothApproach(smoothed_c1, target_c1);
+    smoothed_c2 = smoothApproach(smoothed_c2, target_c2);
+    smoothed_c3 = smoothApproach(smoothed_c3, target_c3);
+    smoothed_c4 = smoothApproach(smoothed_c4, target_c4);
+
+    setDirectionMotors(smoothed_c1, smoothed_c2, smoothed_c3, smoothed_c4);
     return 1;
 }
 
-bool LiftControl()
+int smoothApproach(int current, int target)
 {
-    int speed = NORM_SPEED;
+    int step = (target == 0) ? SMOOTH_STEP_DOWN : SMOOTH_STEP_UP;
+
+    if (current < target)
+    {
+        current += step;
+        if (current > target)
+            current = target;
+    }
+    else if (current > target)
+    {
+        current -= step;
+        if (current < target)
+            current = target;
+    }
+    return current;
+}
+
+bool nang_ha_tay_nang()
+{
+    int speed = TOP_SPEED;
     int c1 = 0, c2 = 0;
 
-    // Get joystick vertical position (Y-axis)
     int nJoyY = ps2x.Analog(PSS_LY) - X_JOY_CALIB;
-
-    // Check if controller disconnected
     if (nJoyY == -1)
     {
         setLiftMotors(0, 0);
         return false;
     }
 
-    // Deadzone to avoid drift
     const int DEADZONE = 10;
-
-    if (nJoyY < -DEADZONE) // Stick pushed up
+    if (nJoyY < -DEADZONE)
     {
         c1 = speed;
         c2 = 0;
     }
-    else if (nJoyY > DEADZONE) // Stick pushed down
+    else if (nJoyY > DEADZONE)
     {
         c1 = 0;
         c2 = speed;
     }
-    else // Stick in neutral position
+    else
     {
-        c1 = 0; // Stop lift
+        c1 = 0;
         c2 = 0;
     }
+
     setLiftMotors(c1, c2);
     return true;
 }
 
-bool BasketControl()
+bool nang_ha_ro_bong()
 {
-    int speed = NORM_SPEED / 2;
+    int speed = TOP_SPEED;
     int c1 = 0, c2 = 0;
 
-    if (ps2x.Button(PSB_PAD_UP))
+    if (ps2x.Button(PSB_R1))
     {
-        c1 = speed; // Basket up
+        c1 = speed;
         c2 = 0;
-    }
-    else if (ps2x.Button(PSB_PAD_DOWN))
-    {
-        c1 = 0;
-        c2 = speed; // Basket down
     }
     else
     {
-        c1 = 0; // Stop basket
+        c1 = 0;
         c2 = 0;
     }
     setBasketMotors(c1, c2);
     return 1;
 }
 
-int angle = 180;
-// bool ballControll()
-// {
-//     if (ps2x.Button(PSB_GREEN))
-//     {
-//         angle -= 10;
-//         Serial.println(angle);
-//         setServoAngle(SERVO_CHANNEL_2, angle);
-//     }
-//     else
-//     {
-//         angle = 180;
-//         setServoAngle(SERVO_CHANNEL_2, 0);
-//     }
-//     return 1;
-// }
+bool tang_giam_chieu_dai_ro_dung_bong()
+{
+    if (ps2x.Button(PSB_GREEN))
+    {
+        servoForward(); // giữ nút xanh lá thì quay xuôi
+    }
+    else if (ps2x.Button(PSB_BLUE))
+    {
+        servoBackward(); // giữ nút xanh dương thì quay ngược
+    }
+    else
+    {
+        servoStop(); // không giữ gì thì dừng
+    }
+    return true;
+}
 
-// bool ballOut()
-// {
-//     if (ps2x.Button(PSB_PAD_UP))
-//     {
-//         setServoRotate(SERVO_CHANNEL_3, SERVO_FORWARD);
-//     }
-//     else
-//     {
-//         setServoRotate(SERVO_CHANNEL_3, SERVO_STOP);
-//     }
-//     return 1;
-// }
+bool mo_cang_chan()
+{
+    if (ps2x.Button(PSB_PAD_UP))
+    {
+        setServoAngle(0); // giữ nút xanh lá thì quay xuôi
+    }
+    else if (ps2x.Button(PSB_PAD_DOWN))
+    {
+        setServoAngle(90); // giữ nút xanh dương thì quay ngược
+    }
+    return true;
+}
